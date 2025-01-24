@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bedrock-gateway
+  namespace: openwebui
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0%
+  selector:
+    matchLabels:
+      app: bedrock-gateway
+  template:
+    metadata:
+      labels:
+        app: bedrock-gateway
+    spec:
+      containers:
+      - name: bedrock-gateway
+        image: IMAGE
+        env:
+        - name: AWS_REGION
+          value: "ap-south-1"
+        imagePullPolicy: Always
+        lifecycle:
+          preStop:
+            exec:
+              command: ["/bin/sh", "/mnt/prestop.sh"]
+        resources:
+          requests:
+            cpu: 1000m
+            memory: 1000Mi
+          limits:
+            cpu: 2000m
+            memory: 2000Mi
+        ports:
+          - containerPort: 8000

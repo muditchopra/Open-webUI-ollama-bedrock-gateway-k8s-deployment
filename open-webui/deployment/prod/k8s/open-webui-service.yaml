@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: open-webui-svc
+  namespace: openwebui
+  labels:
+    app: open-webui-svc
+spec:
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
+  selector:
+    app: open-webui
+  type: NodePort

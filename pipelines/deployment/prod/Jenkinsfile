@@ -1,0 +1,114 @@
+#!/usr/bin/env groovy
+
+def accountConf = [
+  "PROD-EKS-Cluster" : "< AWS ACCCOUNT ID >" // aws account id
+]
+
+def branchConf = [
+  "PROD-EKS-Cluster" : "main"
+]
+
+void setParam(String paramName, String paramValue) {
+  def newParams = []
+  newParams.add(new StringParameterValue(paramName, paramValue))
+  $build().addOrReplaceAction($build().getAction(ParametersAction.class).createUpdated(newParams))    
+}
+
+
+properties([
+    parameters([
+        string(defaultValue: "", description: 'Which Git Branch to clone?', name: 'GIT_BRANCH'),
+        string(defaultValue: "", description: 'AWS Account Number?', name: 'ACCOUNT'),
+        string(defaultValue: "< GIT REPO LINK >", description: 'Git repo name?', name: 'Git_repo_name'), // git repo link
+        choice(choices: ['PROD-EKS-Cluster'], description: 'Profile name of the Environment?', name: 'Profileenv'),
+        booleanParam(defaultValue: true,description: 'Skip tests while building?', name: 'SkipBuildTests'),
+        choice(choices: ['prod'], description: 'Build env folder for env specific files', name: 'BUILD_ENV')
+  ])
+])
+
+echo "Selecting Slave Node for deployment"
+
+if (params.Profileenv == 'PROD-EKS-Cluster' ) {
+    nodename = "prod-jenkins-slave-01"
+}
+echo "Show Node : ${nodename}"
+
+try {
+
+  stage('Clone Repo'){
+    node("${nodename}"){
+      cleanWs()
+
+      if(params.GIT_BRANCH == ""){
+        setParam("GIT_BRANCH",branchConf.get(params.Profileenv));
+      }
+      if(params.ACCOUNT == ""){
+        setParam("ACCOUNT",accountConf.get(params.Profileenv));
+      }
+
+   setParam("BUILD_ENV", "prod");
+      
+      checkout([$class: 'GitSCM', branches: [[name: '*/$GIT_BRANCH']], doGenerateSubmoduleConfigurations: false, extensions: [], submoduleCfg: [], userRemoteConfigs: [[url: '${Git_repo_name}']]])
+
+    }
+   }
+
+  stage('Deploy on k8s') {
+    node("${nodename}"){
+      withEnv(["KUBECONFIG=/var/lib/jenkins/.kube/${Profileenv}"]){
+
+      sh "kubectl apply -f pipelines/deployment/${BUILD_ENV}/k8s"
+      DEPLOYMENT = sh (
+        script: 'cat pipelines/deployment/${BUILD_ENV}/k8s/pipelines-deployment.yaml | yq e .metadata.name - ' ,
+  returnStdout: true
+     ).trim()
+                echo "Creating k8s resources..."
+
+                INITIAL_SLEEP_TIME = 30
+                sleep INITIAL_SLEEP_TIME
+                LATEST_POD = sh (
+                        script: "kubectl get pod -n openwebui -l app=$DEPLOYMENT --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1:].metadata.name}'",
+                        returnStdout: true
+                ).trim()
+                echo "Latest POD IS:: ${LATEST_POD}"
+
+                MAX_TIME = 540
+                TIME_ELAPSED = INITIAL_SLEEP_TIME
+                SLEEP_TIME = 10
+                POD_RESTART_COUNT = "0"
+                while(TIME_ELAPSED <= MAX_TIME && POD_RESTART_COUNT.equals("0")) {
+                    POD_READINESS= sh (
+                            script: "kubectl get pod -n openwebui ${LATEST_POD} -o jsonpath='{.status.containerStatuses[0].ready}'",
+                            returnStdout: true
+                    ).trim()
+                    echo "Readiness: ${POD_READINESS}"
+
+                    POD_RESTART_COUNT = sh (
+                            script: "kubectl get pod -n openwebui ${LATEST_POD} -o jsonpath='{.status.containerStatuses[0].restartCount}'",
+                            returnStdout: true
+                    ).trim()
+                    echo "Restart count: ${POD_RESTART_COUNT}"
+
+                    if (POD_READINESS.equals("true")) {
+                        currentBuild.result = "SUCCESS"
+                        break
+                    }
+
+                    echo "Time elapsed: ${TIME_ELAPSED}"
+                    TIME_ELAPSED = TIME_ELAPSED + SLEEP_TIME
+                    sleep SLEEP_TIME
+                }
+
+                if (TIME_ELAPSED > MAX_TIME || !POD_RESTART_COUNT.equals("0")) {
+                    echo "Please Refer Below Error logs"
+                    sh "kubectl logs --tail=100 ${LATEST_POD}"
+                    error("Deployment Unsuccessful.")
+                }
+            }
+        }
+    }
+}
+catch (err) {
+    currentBuild.result = "FAILURE"
+    throw err
+}

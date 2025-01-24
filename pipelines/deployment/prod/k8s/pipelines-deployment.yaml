@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: pipelines
+  name: pipelines
+  namespace: openwebui
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pipelines
+  template:
+    metadata:
+      labels:
+        app: pipelines
+    spec:  
+      containers:
+      - image: ghcr.io/open-webui/pipelines:main
+        name: pipelines
+        ports:
+        - containerPort: 9099
+        resources:
+          requests:
+            cpu: "1000m"
+            memory: "2Gi"
+          limits:
+            cpu: "2000m"
+            memory: "3Gi"
+      tolerations: 
+      - key: "workload"
+        operator: "Equal"
+        value: "open-webui"
+        effect: "NoExecute"
+      affinity: 
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: workload
+                operator: In
+                values:
+                - open-webui
